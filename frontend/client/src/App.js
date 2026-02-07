@@ -9,14 +9,17 @@ function App() {
   const [videoId, setVideoId] = useState("");
 
   const [quiz, setQuiz] = useState([]);
+
+  // 🔥 NEW STATES FOR ONE-BY-ONE
+  const [current, setCurrent] = useState(0);
+  const [answers, setAnswers] = useState({});
+
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
 
   const [watchedSeconds, setWatchedSeconds] = useState(0);
-  const [selected, setSelected] = useState({});
   const [showAnswers, setShowAnswers] = useState(false);
 
-  // transcript
   const [transcriptText, setTranscriptText] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -65,7 +68,6 @@ function App() {
           Math.floor(playerRef.current.getCurrentTime())
         );
 
-        // 🔥 FIXED AUTO SCROLL
         if (autoScroll && transcriptRef.current) {
 
           const box = transcriptRef.current;
@@ -90,7 +92,8 @@ function App() {
     if (!selectedLecture) return;
 
     setQuiz([]);
-    setSelected({});
+    setAnswers({});
+    setCurrent(0);
     setShowAnswers(false);
     setWatchedSeconds(0);
     setTranscriptText("");
@@ -117,7 +120,6 @@ function App() {
       setVideoId(data.video_id);
       initPlayer(data.video_id);
 
-      // 🔥 TRANSCRIPT LOAD
       fetch(
         `http://127.0.0.1:8000/api/transcript/${data.video_id}/`
       )
@@ -138,6 +140,8 @@ function App() {
 
     setLoadingQuiz(true);
     setQuiz([]);
+    setAnswers({});
+    setCurrent(0);
     setShowAnswers(false);
 
     const res = await fetch(
@@ -160,6 +164,29 @@ function App() {
 
     setLoadingQuiz(false);
   };
+
+
+  // =========== QUIZ NAVIGATION ============
+
+  const selectOption = (idx) => {
+    setAnswers({
+      ...answers,
+      [current]: idx
+    });
+  };
+
+  const next = () => {
+    if (current < quiz.length - 1)
+      setCurrent(current + 1);
+  };
+
+  const prev = () => {
+    if (current > 0)
+      setCurrent(current - 1);
+  };
+
+  // ========================================
+
 
 
   return (
@@ -205,8 +232,7 @@ function App() {
             </div>
 
             <p className="watch-time">
-              ⏱ Watched: {Math.floor(watchedSeconds / 60)}m{" "}
-              {watchedSeconds % 60}s
+              ⏱ Watched: {watchedSeconds}s
             </p>
 
 
@@ -257,7 +283,8 @@ function App() {
 
 
 
-          {/* QUIZ */}
+          {/* ========== QUIZ ONE BY ONE ========== */}
+
           <div className="quiz-card">
 
             <h2>AI Quiz</h2>
@@ -274,42 +301,106 @@ function App() {
             </p>
 
 
-            {quiz.map((q, i) => (
-              <div key={i} className="quiz-item">
-
-                <b>{i + 1}. {q.question}</b>
-
-                {q.options.map((opt, idx) => (
-                  <label key={idx} className="option">
-                    <input
-                      type="radio"
-                      name={`q-${i}`}
-                      onChange={() =>
-                        setSelected({ ...selected, [i]: idx })
-                      }
-                    />
-                    {opt}
-                  </label>
-                ))}
-
-                {showAnswers && (
-                  <p className="correct">
-                    ✅ {q.options[q.correct_index]}
-                  </p>
-                )}
-
-              </div>
-            ))}
-
-
 
             {quiz.length > 0 && (
-              <button
-                className="btn btn-primary"
-                onClick={() => setShowAnswers(true)}
-              >
-                Check Answers
-              </button>
+
+              <>
+                <div className="progress">
+                  Question {current + 1} / {quiz.length}
+                </div>
+
+
+                <div className="quiz-item">
+
+                  <b>
+                    {current + 1}. {quiz[current].question}
+                  </b>
+
+                  <div className="options">
+
+                    {quiz[current].options.map((opt, idx) => (
+
+                      <label key={idx} className="opt">
+
+                        <input
+                          type="radio"
+                          name="opt"
+                          checked={answers[current] === idx}
+                          onChange={() => selectOption(idx)}
+                        />
+
+                        {opt}
+
+                      </label>
+
+                    ))}
+
+                  </div>
+
+
+
+                  {showAnswers && (
+
+                    <div className="result">
+
+                      {answers[current] ===
+                        quiz[current].correct_index
+                        ? "✅ Correct"
+                        : "❌ Wrong"
+                      }
+
+                      <div className="ans">
+                        Correct: {
+                          quiz[current].options[
+                            quiz[current].correct_index
+                          ]
+                        }
+                      </div>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+
+
+                <div className="nav">
+
+                  <button
+                    className="btn"
+                    onClick={prev}
+                    disabled={current === 0}
+                  >
+                    Previous
+                  </button>
+
+
+
+                  {current < quiz.length - 1 ? (
+
+                    <button
+                      className="btn btn-primary"
+                      onClick={next}
+                    >
+                      Next
+                    </button>
+
+                  ) : (
+
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => setShowAnswers(true)}
+                    >
+                      Finish
+                    </button>
+
+                  )}
+
+                </div>
+
+              </>
+
             )}
 
           </div>

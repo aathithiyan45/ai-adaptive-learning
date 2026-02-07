@@ -3,7 +3,8 @@ from .views import (
     submit_video,
     generate_quiz_view,
     get_lectures,
-    get_transcript        # 🔥 ADD THIS
+    get_transcript,
+    generate_notes_view      # ✅ IMPORT DIRECTLY
 )
 
 urlpatterns = [
@@ -11,6 +12,8 @@ urlpatterns = [
     path('submit-video/', submit_video),
     path('generate-quiz/', generate_quiz_view),
 
-    # 🔥 MISSING API
     path('transcript/<str:video_id>/', get_transcript),
+
+    # ✅ CORRECT
+    path('generate-notes/', generate_notes_view),
 ]

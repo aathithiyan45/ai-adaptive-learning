@@ -8,21 +8,16 @@ import json
 from .utils.youtube import download_audio
 from .utils.transcriber import transcribe_audio
 from .utils.quiz_generator import generate_quiz
+from .utils.notes_generator import generate_notes
 
 from .constants import LECTURE_VIDEOS
 
 
-# ==================================================
-# 📂 Transcript storage
-# ==================================================
 BASE_DIR = Path(__file__).resolve().parent
 TRANSCRIPT_DIR = BASE_DIR / "data" / "transcripts"
 TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ==================================================
-# 🔹 Helper: Extract YouTube Video ID
-# ==================================================
 def extract_video_id(url):
     patterns = [
         r"youtu\.be/([^?&]+)",
@@ -36,13 +31,10 @@ def extract_video_id(url):
     return None
 
 
-# ==================================================
-# 🔹 Slice transcript by watch time
-# ==================================================
 def get_partial_transcript(full_transcript, watched_seconds):
 
     if not watched_seconds or watched_seconds <= 0:
-        return full_transcript[:800]
+        return full_transcript[:900]
 
     words_per_second = 2.5
     max_words = int(watched_seconds * words_per_second)
@@ -52,15 +44,11 @@ def get_partial_transcript(full_transcript, watched_seconds):
 
 
 # ==================================================
-# 🟢 GET LECTURES
-# ==================================================
 @api_view(["GET"])
 def get_lectures(request):
     return Response(LECTURE_VIDEOS)
 
 
-# ==================================================
-# 🟢 SUBMIT VIDEO → GENERATE TRANSCRIPT
 # ==================================================
 @api_view(["POST"])
 def submit_video(request):
@@ -88,7 +76,6 @@ def submit_video(request):
             })
 
         audio_path = download_audio(youtube_url)
-
         data = transcribe_audio(audio_path)
 
         transcript_path.write_text(
@@ -99,7 +86,6 @@ def submit_video(request):
         return Response({
             "status": "success",
             "video_id": video_id,
-            "title": LECTURE_VIDEOS[lecture_id]["title"],
             "message": "Transcript generated"
         })
 
@@ -107,8 +93,6 @@ def submit_video(request):
         return Response({"error": str(e)}, status=400)
 
 
-# ==================================================
-# 🟢 GET TRANSCRIPT
 # ==================================================
 @api_view(["GET"])
 def get_transcript(request, video_id):
@@ -121,21 +105,19 @@ def get_transcript(request, video_id):
     try:
         content = transcript_path.read_text(encoding="utf-8")
 
-        if not content.strip().startswith("{"):
-            return Response({
-                "full_text": content,
-                "timeline": []
-            })
+        if content.strip().startswith("{"):
+            data = json.loads(content)
+            return Response(data)
 
-        data = json.loads(content)
-        return Response(data)
+        return Response({
+            "full_text": content,
+            "timeline": []
+        })
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
 
-# ==================================================
-# 🟢 QUIZ GENERATION
 # ==================================================
 @api_view(["POST"])
 def generate_quiz_view(request):
@@ -160,16 +142,9 @@ def generate_quiz_view(request):
         else:
             full_text = content
 
-        partial_transcript = get_partial_transcript(full_text, watched_seconds)
+        partial = get_partial_transcript(full_text, watched_seconds)
 
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print("VIDEO ID:", video_id)
-        print("WATCHED SECONDS:", watched_seconds)
-        print("WORDS USED:", len(partial_transcript.split()))
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-        # ✅ FIXED CALL – PASS VIDEO ID
-        quiz_data = generate_quiz(partial_transcript, video_id)
+        quiz_data = generate_quiz(partial, video_id)
 
         if not quiz_data:
             return Response(
@@ -184,4 +159,38 @@ def generate_quiz_view(request):
 
     except Exception as e:
         print("QUIZ ERROR >>>", e)
+        return Response({"error": str(e)}, status=500)
+
+
+# ==================================================
+@api_view(["POST"])
+def generate_notes_view(request):
+
+    video_id = request.data.get("video_id")
+
+    if not video_id:
+        return Response({"error": "Video ID required"}, status=400)
+
+    transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
+
+    if not transcript_path.exists():
+        return Response({"error": "Transcript not found"}, status=400)
+
+    try:
+        content = transcript_path.read_text(encoding="utf-8")
+
+        if content.strip().startswith("{"):
+            data = json.loads(content)
+            full_text = data.get("full_text", "")
+        else:
+            full_text = content
+
+        notes = generate_notes(full_text)
+
+        return Response({
+            "status": "success",
+            "notes": notes
+        })
+
+    except Exception as e:
         return Response({"error": str(e)}, status=500)
