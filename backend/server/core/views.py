@@ -1,13 +1,16 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
 import re
-from pathlib import Path
 import json
+from pathlib import Path
 
 from .utils.youtube import download_audio
-from .utils.transcriber import transcribe_audio
+from .utils.transcriber import transcribe_audio  # ← NO CHANGE, same import!
 from .utils.quiz_generator import generate_quiz
 from .utils.notes_generator import generate_notes
+from .utils.chatbot import answer_from_transcript
+
 from .constants import LECTURE_VIDEOS
 
 
@@ -33,45 +36,33 @@ def extract_video_id(url):
 
 def get_partial_transcript(full_transcript, watched_seconds):
     """
-    Return transcript only for watched duration
+    Return transcript text based on watched duration
     """
     if not watched_seconds or watched_seconds <= 0:
         return " ".join(full_transcript.split()[:900])
 
     words_per_second = 2.5
     max_words = int(watched_seconds * words_per_second)
-
-    words = full_transcript.split()
-    return " ".join(words[:max_words])
+    return " ".join(full_transcript.split()[:max_words])
 
 
 # ================= API ENDPOINTS =================
 
 @api_view(["GET"])
 def get_lectures(request):
-    """
-    Return available lectures
-    """
     return Response(LECTURE_VIDEOS)
 
 
 # ------------------------------------------------
 @api_view(["POST"])
 def submit_video(request):
-    """
-    Download audio + generate transcript if not exists
-    """
     lecture_id = request.data.get("lecture_id")
 
-    if not lecture_id:
-        return Response({"error": "lecture_id required"}, status=400)
-
-    if lecture_id not in LECTURE_VIDEOS:
-        return Response({"error": "Invalid Lecture ID"}, status=400)
+    if not lecture_id or lecture_id not in LECTURE_VIDEOS:
+        return Response({"error": "Invalid lecture_id"}, status=400)
 
     youtube_url = LECTURE_VIDEOS[lecture_id]["url"]
     video_id = extract_video_id(youtube_url)
-
     transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
 
     try:
@@ -79,13 +70,20 @@ def submit_video(request):
             return Response({
                 "status": "success",
                 "video_id": video_id,
-                "title": LECTURE_VIDEOS[lecture_id]["title"],
                 "message": "Transcript already exists"
             })
 
+        # Download audio
         audio_path = download_audio(youtube_url)
-        data = transcribe_audio(audio_path)
+        
+        # 🔥 CHANGED: Pass youtube_url to transcribe_audio
+        print(f"Processing: {youtube_url}")
+        data = transcribe_audio(audio_path, youtube_url=youtube_url)
+        
+        print(f"✅ Method: {data.get('source', 'unknown')}")
+        print(f"✅ Segments: {len(data.get('timeline', []))}")
 
+        # Save transcript
         transcript_path.write_text(
             json.dumps(data, indent=2),
             encoding="utf-8"
@@ -94,19 +92,20 @@ def submit_video(request):
         return Response({
             "status": "success",
             "video_id": video_id,
-            "message": "Transcript generated"
+            "message": "Transcript generated",
+            "method": data.get('source', 'unknown')
         })
 
     except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return Response({"error": str(e)}, status=500)
 
 
 # ------------------------------------------------
 @api_view(["GET"])
 def get_transcript(request, video_id):
-    """
-    Return transcript text
-    """
     transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
 
     if not transcript_path.exists():
@@ -116,8 +115,7 @@ def get_transcript(request, video_id):
         content = transcript_path.read_text(encoding="utf-8")
 
         if content.strip().startswith("{"):
-            data = json.loads(content)
-            return Response(data)
+            return Response(json.loads(content))
 
         return Response({"full_text": content})
 
@@ -128,9 +126,6 @@ def get_transcript(request, video_id):
 # ------------------------------------------------
 @api_view(["POST"])
 def generate_quiz_view(request):
-    """
-    Generate quiz from watched transcript
-    """
     video_id = request.data.get("video_id")
     watched_seconds = request.data.get("watched_seconds", 0)
 
@@ -138,7 +133,6 @@ def generate_quiz_view(request):
         return Response({"error": "Video ID required"}, status=400)
 
     transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
-
     if not transcript_path.exists():
         return Response({"error": "Transcript not found"}, status=400)
 
@@ -146,21 +140,19 @@ def generate_quiz_view(request):
         content = transcript_path.read_text(encoding="utf-8")
 
         if content.strip().startswith("{"):
-            data = json.loads(content)
-            full_text = data.get("full_text", "")
+            full_text = json.loads(content).get("full_text", "")
         else:
             full_text = content
 
         partial_text = get_partial_transcript(full_text, watched_seconds)
+        quiz = generate_quiz(partial_text, video_id)
 
-        quiz_data = generate_quiz(partial_text, video_id)
-
-        if not quiz_data:
+        if not quiz:
             return Response({"error": "Quiz generation failed"}, status=500)
 
         return Response({
             "status": "success",
-            "quiz": quiz_data
+            "quiz": quiz
         })
 
     except Exception as e:
@@ -171,9 +163,6 @@ def generate_quiz_view(request):
 # ------------------------------------------------
 @api_view(["POST"])
 def generate_notes_view(request):
-    """
-    Generate adaptive notes (watched or full)
-    """
     video_id = request.data.get("video_id")
     watched_seconds = request.data.get("watched_seconds", 0)
     mode = request.data.get("mode", "watched")  # watched | full
@@ -182,7 +171,6 @@ def generate_notes_view(request):
         return Response({"error": "Video ID required"}, status=400)
 
     transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
-
     if not transcript_path.exists():
         return Response({"error": "Transcript not found"}, status=400)
 
@@ -190,22 +178,19 @@ def generate_notes_view(request):
         content = transcript_path.read_text(encoding="utf-8")
 
         if content.strip().startswith("{"):
-            data = json.loads(content)
-            full_text = data.get("full_text", "")
+            full_text = json.loads(content).get("full_text", "")
         else:
             full_text = content
 
-        # 🔥 Adaptive source selection
-        if mode == "watched":
-            source_text = get_partial_transcript(full_text, watched_seconds)
-            title = "Watched Lecture Notes"
-        else:
-            source_text = full_text
-            title = "Complete Lecture Notes"
+        source_text = (
+            get_partial_transcript(full_text, watched_seconds)
+            if mode == "watched"
+            else full_text
+        )
 
         notes = generate_notes(
             source_text,
-            title=title,
+            title="Watched Notes" if mode == "watched" else "Full Lecture Notes",
             mode=mode
         )
 
@@ -217,4 +202,40 @@ def generate_notes_view(request):
 
     except Exception as e:
         print("NOTES ERROR >>>", e)
+        return Response({"error": str(e)}, status=500)
+
+
+# ------------------------------------------------
+@api_view(["POST"])
+def chatbot_view(request):
+    video_id = request.data.get("video_id")
+    question = request.data.get("question")
+
+    if not video_id or not question:
+        return Response(
+            {"error": "video_id and question required"},
+            status=400
+        )
+
+    transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
+    if not transcript_path.exists():
+        return Response({"error": "Transcript not found"}, status=404)
+
+    try:
+        content = transcript_path.read_text(encoding="utf-8")
+
+        if content.strip().startswith("{"):
+            full_text = json.loads(content).get("full_text", "")
+        else:
+            full_text = content
+
+        answer = answer_from_transcript(full_text, question)
+
+        return Response({
+            "status": "success",
+            "answer": answer
+        })
+
+    except Exception as e:
+        print("CHATBOT ERROR >>>", e)
         return Response({"error": str(e)}, status=500)
