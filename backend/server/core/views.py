@@ -1,6 +1,5 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-import os
 import re
 from pathlib import Path
 import json
@@ -9,15 +8,16 @@ from .utils.youtube import download_audio
 from .utils.transcriber import transcribe_audio
 from .utils.quiz_generator import generate_quiz
 from .utils.notes_generator import generate_notes
-
 from .constants import LECTURE_VIDEOS
 
 
+# ================= PATH SETUP =================
 BASE_DIR = Path(__file__).resolve().parent
 TRANSCRIPT_DIR = BASE_DIR / "data" / "transcripts"
 TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# ================= HELPERS =================
 def extract_video_id(url):
     patterns = [
         r"youtu\.be/([^?&]+)",
@@ -32,9 +32,11 @@ def extract_video_id(url):
 
 
 def get_partial_transcript(full_transcript, watched_seconds):
-
+    """
+    Return transcript only for watched duration
+    """
     if not watched_seconds or watched_seconds <= 0:
-        return full_transcript[:900]
+        return " ".join(full_transcript.split()[:900])
 
     words_per_second = 2.5
     max_words = int(watched_seconds * words_per_second)
@@ -43,16 +45,22 @@ def get_partial_transcript(full_transcript, watched_seconds):
     return " ".join(words[:max_words])
 
 
-# ==================================================
+# ================= API ENDPOINTS =================
+
 @api_view(["GET"])
 def get_lectures(request):
+    """
+    Return available lectures
+    """
     return Response(LECTURE_VIDEOS)
 
 
-# ==================================================
+# ------------------------------------------------
 @api_view(["POST"])
 def submit_video(request):
-
+    """
+    Download audio + generate transcript if not exists
+    """
     lecture_id = request.data.get("lecture_id")
 
     if not lecture_id:
@@ -90,13 +98,15 @@ def submit_video(request):
         })
 
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({"error": str(e)}, status=500)
 
 
-# ==================================================
+# ------------------------------------------------
 @api_view(["GET"])
 def get_transcript(request, video_id):
-
+    """
+    Return transcript text
+    """
     transcript_path = TRANSCRIPT_DIR / f"{video_id}.txt"
 
     if not transcript_path.exists():
@@ -109,19 +119,18 @@ def get_transcript(request, video_id):
             data = json.loads(content)
             return Response(data)
 
-        return Response({
-            "full_text": content,
-            "timeline": []
-        })
+        return Response({"full_text": content})
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
 
-# ==================================================
+# ------------------------------------------------
 @api_view(["POST"])
 def generate_quiz_view(request):
-
+    """
+    Generate quiz from watched transcript
+    """
     video_id = request.data.get("video_id")
     watched_seconds = request.data.get("watched_seconds", 0)
 
@@ -142,15 +151,12 @@ def generate_quiz_view(request):
         else:
             full_text = content
 
-        partial = get_partial_transcript(full_text, watched_seconds)
+        partial_text = get_partial_transcript(full_text, watched_seconds)
 
-        quiz_data = generate_quiz(partial, video_id)
+        quiz_data = generate_quiz(partial_text, video_id)
 
         if not quiz_data:
-            return Response(
-                {"error": "Quiz generation failed"},
-                status=500
-            )
+            return Response({"error": "Quiz generation failed"}, status=500)
 
         return Response({
             "status": "success",
@@ -162,11 +168,15 @@ def generate_quiz_view(request):
         return Response({"error": str(e)}, status=500)
 
 
-# ==================================================
+# ------------------------------------------------
 @api_view(["POST"])
 def generate_notes_view(request):
-
+    """
+    Generate adaptive notes (watched or full)
+    """
     video_id = request.data.get("video_id")
+    watched_seconds = request.data.get("watched_seconds", 0)
+    mode = request.data.get("mode", "watched")  # watched | full
 
     if not video_id:
         return Response({"error": "Video ID required"}, status=400)
@@ -185,12 +195,26 @@ def generate_notes_view(request):
         else:
             full_text = content
 
-        notes = generate_notes(full_text)
+        # 🔥 Adaptive source selection
+        if mode == "watched":
+            source_text = get_partial_transcript(full_text, watched_seconds)
+            title = "Watched Lecture Notes"
+        else:
+            source_text = full_text
+            title = "Complete Lecture Notes"
+
+        notes = generate_notes(
+            source_text,
+            title=title,
+            mode=mode
+        )
 
         return Response({
             "status": "success",
+            "mode": mode,
             "notes": notes
         })
 
     except Exception as e:
+        print("NOTES ERROR >>>", e)
         return Response({"error": str(e)}, status=500)

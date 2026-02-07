@@ -5,8 +5,10 @@ import re
 from groq import Groq
 from dotenv import load_dotenv
 
+# ==================================================
+# ENV + CLIENT
+# ==================================================
 load_dotenv()
-
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 META_PATH = os.path.join(os.path.dirname(__file__), "quiz_meta.json")
@@ -21,7 +23,7 @@ def load_meta():
     try:
         with open(META_PATH, "r") as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 
@@ -70,23 +72,21 @@ BASIC_PROMPT = """
 Create 2 STANDARD MCQ questions:
 - simple concept based
 - beginner friendly
-- avoid code output questions
-- 4 options each
+- avoid code/output questions
 """
-
 
 STYLE_PROMPTS = [
 """
 Create 1 CONCEPT MCQ:
-- definition / purpose based
+- definition or purpose based
 """,
 """
 Create 1 SCENARIO MCQ:
-- real life usage
+- real-world usage situation
 """,
 """
 Create 1 OUTPUT MCQ:
-- predict result
+- reasoning or behavior prediction
 """,
 """
 Create 1 TRUE/FALSE MCQ with options:
@@ -96,34 +96,36 @@ Create 1 TRUE/FALSE MCQ with options:
 
 
 # ==================================================
-# CORE
+# LLM HELPERS
 # ==================================================
 def clean_json(text):
-    text = text.replace("```json", "").replace("```", "")
-    text = text.strip()
+    """
+    Removes markdown + trims extra text
+    """
+    text = text.replace("```json", "").replace("```", "").strip()
 
-    # sometimes model adds extra text
     start = text.find("[")
     end = text.rfind("]")
 
     if start != -1 and end != -1:
-        text = text[start:end+1]
+        text = text[start:end + 1]
 
     return text
 
 
 def call_llm(prompt):
-
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.85,
-        max_tokens=650
+        max_tokens=700
     )
-
     return response.choices[0].message.content.strip()
 
 
+# ==================================================
+# 🔥 MAIN QUIZ GENERATOR (WITH EXPLANATION)
+# ==================================================
 def generate_quiz(transcript, video_id, max_questions=6):
 
     if not transcript or len(transcript.split()) < 80:
@@ -142,22 +144,24 @@ def generate_quiz(transcript, video_id, max_questions=6):
         if len(collected) >= max_questions:
             break
 
-        style = BASIC_PROMPT if attempt == 0 else random.choice(STYLE_PROMPTS)
+        style_prompt = BASIC_PROMPT if attempt == 0 else random.choice(STYLE_PROMPTS)
 
         prompt = f"""
-{style}
+{style_prompt}
 
 STRICT RULES:
-- MUST be from TEXT only
-- Do NOT repeat earlier questions
-- Return ONLY JSON array
+- Questions MUST come ONLY from TEXT
+- Do NOT repeat questions
+- Explanation MUST justify why correct option is correct
+- Return ONLY valid JSON (no markdown, no text)
 
 FORMAT:
 [
   {{
     "question": "...",
     "options": ["A","B","C","D"],
-    "correct_index": 0
+    "correct_index": 0,
+    "explanation": "Clear reason for the correct answer"
   }}
 ]
 
@@ -167,23 +171,30 @@ TEXT:
 
         try:
             raw = call_llm(prompt)
-
             raw = clean_json(raw)
-
             questions = json.loads(raw)
 
             for q in questions:
 
-                if not q.get("question") or not q.get("options"):
+                # 🔒 VALIDATION
+                if not all(k in q for k in ["question", "options", "correct_index", "explanation"]):
                     continue
 
-                if len(q["options"]) != 4:
+                if not isinstance(q["options"], list) or len(q["options"]) != 4:
                     continue
 
-                if not any(is_similar(q["question"], u) for u in used_questions):
+                if not isinstance(q["correct_index"], int):
+                    continue
 
-                    collected.append(q)
-                    used_questions.append(q["question"])
+                if not q["explanation"].strip():
+                    continue
+
+                # 🔁 DUPLICATE CHECK
+                if any(is_similar(q["question"], used) for used in used_questions):
+                    continue
+
+                collected.append(q)
+                used_questions.append(q["question"])
 
                 if len(collected) >= max_questions:
                     break
@@ -193,6 +204,6 @@ TEXT:
             continue
 
     increase_attempt(video_id)
-
     random.shuffle(collected)
+
     return collected

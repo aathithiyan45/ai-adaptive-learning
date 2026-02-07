@@ -1,50 +1,69 @@
 import os
-import json
 from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ✅ THIS WAS MISSING OR MISNAMED EARLIER
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
-def generate_notes(transcript):
+def generate_notes(transcript, title="Lecture Notes", mode="watched"):
+    """
+    Generate clean, student-friendly notes.
+    """
 
     if not transcript or len(transcript.split()) < 80:
         return "Not enough content to generate notes."
 
+    # limit size (LLM safe)
+    transcript = " ".join(transcript.split()[:1800])
+
+    if mode == "watched":
+        scope = "ONLY what the student has watched so far"
+    else:
+        scope = "the COMPLETE lecture content"
+
     prompt = f"""
-Create CLEAN STUDY NOTES from this lecture.
+You are a university professor creating EXAM-ORIENTED STUDY NOTES.
 
-FORMAT STRICTLY:
+Rules:
+- Simple English
+- Beginner friendly
+- Structured
+- Easy to revise
 
-# Title
+Cover {scope}.
 
-## Key Concepts
-- point
-- point
+FORMAT STRICTLY IN MARKDOWN:
 
-## Explanation
-short paragraph
+# {title}
+
+## What You Will Learn
+- 3 to 5 clear learning points
+
+## Concept Explanation
+Explain the topic in simple language (5–6 lines).
 
 ## Important Terms
-- term : meaning
+- **Term** – simple meaning
 
-## Summary
-3-4 lines
+## Key Takeaways
+- 3 short bullet points
 
-TEXT:
+LECTURE CONTENT:
 {transcript}
 """
 
     try:
-        res = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=900
+            temperature=0.5,
+            max_tokens=800
         )
 
-        return res.choices[0].message.content.strip()
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
-        return f"Error: {e}"
+        return f"Notes generation failed: {e}"
